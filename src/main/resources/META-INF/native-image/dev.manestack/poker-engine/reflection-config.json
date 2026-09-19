@@ -1,0 +1,62 @@
+[
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerTableRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerUserRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerUserBalanceRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerDepositRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerWithdrawalRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerOutcomeRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerGameSessionRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerJackpotRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerChatMessageRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "dev.manestack.jooq.generated.tables.records.PokerDataBlockRecord",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  }
+]

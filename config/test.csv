@@ -1,0 +1,16 @@
+hand_id,player1_hand,player2_hand,community_cards,winner
+1,AhKh,QdQs,2c5dJc9sTc,player1
+2,7h8h,6s9s,5h6h9dTsJh,player1
+3,KdKs,AdQc,2d2sKdJd3d,player1
+4,AsQs,AcKc,2s3s5s6s7s,player1
+5,9c9d,8h8s,9h8d4c4s2d,player1
+6,ThJd,QcKd,9c8c7c6h5h,player2
+7,5h6h,5d6d,5s6s7h8d9d,split
+8,AdTd,AsTs,AhTcAc5c6d,player2
+9,QhQd,KhKc,4s4d4cQsQc,player1
+10,2h3h,4h5h,6h7h8h9hTh,player2
+11,JsTs,Qs9s,8s7s6s5s4s,player2
+12,3d3c,4h4s,3h4d2c6c7d,player2
+13,AhAd,KsKd,2h3h4h5h6h,player2
+14,2s2d,3c3s,2h3h5d5s5c,player2
+15,QcJc,Tc9c,8c7c6c5c4c,player1

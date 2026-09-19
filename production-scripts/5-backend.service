@@ -1,0 +1,35 @@
+[Unit]
+Description=Poker Backend Service
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=poker
+Group=poker
+WorkingDirectory=/opt/backend
+ExecStart=/usr/bin/java -Xms1G -Xmx2G -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+UseStringDeduplication -Dquarkus.http.io-threads=4 -Dquarkus.vertx.worker-pool-size=20 -jar /opt/backend/app.jar
+ExecStop=/bin/kill -15 $MAINPID
+Restart=always
+RestartSec=10
+
+# Environment variables
+Environment=DB_URL=jdbc:postgresql://127.0.0.1:5432/poker
+Environment=DB_USERNAME=poker
+Environment=DB_PASSWORD=poker321
+Environment=REDIS_URL=redis://127.0.0.1:6379
+Environment=JWT_SIGN_KEY=/opt/backend/secrets/privateKey.pem
+Environment=JWT_VERIFY_KEY=/opt/backend/secrets/publicKey.pem
+
+# Logging
+StandardOutput=append:/opt/backend/logs/app.log
+StandardError=append:/opt/backend/logs/app.log
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/backend/logs
+
+[Install]
+WantedBy=multi-user.target

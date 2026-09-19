@@ -1,0 +1,91 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+      - 'config/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: poker
+          POSTGRES_PASSWORD: poker_test
+          POSTGRES_DB: poker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Generate JWT keys for testing
+        run: |
+          mkdir -p secrets
+          openssl genrsa -out secrets/privateKey.pem 2048
+          openssl rsa -in secrets/privateKey.pem -pubout -out secrets/publicKey.pem
+
+      - name: Build and test
+        run: ./mvnw clean verify -DskipITs=false
+        env:
+          DB_URL: jdbc:postgresql://localhost:5432/poker_test
+          DB_USERNAME: poker
+          DB_PASSWORD: poker_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SIGN_KEY: secrets/privateKey.pem
+          JWT_VERIFY_KEY: secrets/publicKey.pem
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: target/surefire-reports/
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Check compilation
+        run: ./mvnw compile -q

@@ -1,0 +1,2 @@
+ALTER TABLE poker_table ADD COLUMN IF NOT EXISTS card_bg_color VARCHAR(7);
+ALTER TABLE poker_table ADD COLUMN IF NOT EXISTS total_rake_collected INTEGER DEFAULT 0;
