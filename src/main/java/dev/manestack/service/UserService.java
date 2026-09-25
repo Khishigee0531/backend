@@ -232,7 +232,7 @@ public class UserService {
 
                     if (user == null) {
                         LOG.errorv("LOGIN FAILED: User {0} not found in database", normalizedUsername);
-                        throw new RuntimeException("User not found");
+                        throw new jakarta.ws.rs.NotAuthorizedException("Invalid username or password", (Object[]) null);
                     }
 
                     LOG.infov("LOGIN: User found: userId={0}, role={1}", user.getUserId(), user.getRole());
@@ -240,7 +240,7 @@ public class UserService {
                     String storedHash = user.getPassword();
                     if (storedHash == null || storedHash.isBlank()) {
                         LOG.errorv("LOGIN FAILED: User {0} has no password set", normalizedUsername);
-                        throw new RuntimeException("Invalid username or password");
+                        throw new jakarta.ws.rs.NotAuthorizedException("Invalid username or password", (Object[]) null);
                     }
 
                     LOG.infov("LOGIN: Stored hash prefix={0}, length={1}", storedHash.substring(0, Math.min(10, storedHash.length())), storedHash.length());
@@ -248,7 +248,7 @@ public class UserService {
                     // Check if stored password is a valid BCrypt hash
                     if (!storedHash.startsWith("$2a$") && !storedHash.startsWith("$2b$") && !storedHash.startsWith("$2y$")) {
                         LOG.errorv("LOGIN FAILED: User {0} has invalid password hash format: {1}", normalizedUsername, storedHash.substring(0, Math.min(10, storedHash.length())));
-                        throw new RuntimeException("Invalid username or password");
+                        throw new jakarta.ws.rs.NotAuthorizedException("Invalid username or password", (Object[]) null);
                     }
 
                     BCrypt.Result result = BCrypt.verifyer().verify(password.toCharArray(), storedHash);
@@ -256,7 +256,7 @@ public class UserService {
 
                     if (!result.verified) {
                         LOG.errorv("LOGIN FAILED: Password verification failed for user {0}", normalizedUsername);
-                        throw new RuntimeException("Invalid username or password");
+                        throw new jakarta.ws.rs.NotAuthorizedException("Invalid username or password", (Object[]) null);
                     }
 
                     String jwt = generateJWT(user.getUserId(), user.getRole().name());
@@ -686,7 +686,7 @@ public class UserService {
                 ensureJackpotRow();
                 return dsl.select(POKER_JACKPOT.CURRENT_AMOUNT)
                         .from(POKER_JACKPOT)
-                        .fetchOneInto(BigDecimal.class);
+                        .fetchAnyInto(BigDecimal.class);
             }
         });
     }

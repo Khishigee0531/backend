@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: poker-postgres
+    environment:
+      POSTGRES_DB: poker
+      POSTGRES_USER: poker
+      POSTGRES_PASSWORD: poker321
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poker -d poker"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    container_name: poker-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: src/main/docker/Dockerfile.jvm
+    container_name: poker-backend
+    environment:
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/poker
+      QUARKUS_DATASOURCE_USERNAME: poker
+      QUARKUS_DATASOURCE_PASSWORD: poker321
+      QUARKUS_REDIS_HOSTS: redis://redis:6379
+      QUARKUS_FLYWAY_MIGRATE_AT_START: "true"
+      QUARKUS_FLYWAY_BASELINE_ON_MIGRATE: "true"
+      QUARKUS_FLYWAY_BASELINE_VERSION: "5"
+      QUARKUS_SMALLRYE_JWT_SIGN_KEY_LOCATION: secrets/privateKey.pem
+      QUARKUS_SMALLRYE_JWT_VERIFY_KEY_LOCATION: secrets/publicKey.pem
+      MP_JWT_VERIFY_PUBLICKEY_LOCATION: secrets/publicKey.pem
+      JWT_ISSUER: https://manestack.dev
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./secrets:/deployments/secrets:ro
+
+volumes:
+  postgres_data:
+  redis_data:

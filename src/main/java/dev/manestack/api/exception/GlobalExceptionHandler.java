@@ -24,6 +24,9 @@ public class GlobalExceptionHandler {
         if (throwable instanceof NotFoundException) {
             status = Response.Status.NOT_FOUND;
             message = throwable.getMessage();
+        } else if (throwable instanceof jakarta.ws.rs.NotAuthorizedException) {
+            status = Response.Status.UNAUTHORIZED;
+            message = "Invalid username or password";
         } else if (throwable instanceof IllegalArgumentException) {
             status = Response.Status.BAD_REQUEST;
             message = throwable.getMessage();

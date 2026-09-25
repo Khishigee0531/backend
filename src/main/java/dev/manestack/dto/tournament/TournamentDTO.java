@@ -1,0 +1,53 @@
+package dev.manestack.dto.tournament;
+
+import io.vertx.core.json.JsonObject;
+
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.List;
+
+public record TournamentDTO(
+    Long tournamentId,
+    String tournamentName,
+    String description,
+    String tournamentType,
+    String gameVariant,
+    OffsetDateTime registrationStart,
+    OffsetDateTime registrationEnd,
+    OffsetDateTime startTime,
+    OffsetDateTime endTime,
+    String status,
+    Integer prizePool,
+    Integer guaranteedPrizePool,
+    Integer placesPaid,
+    JsonObject prizeDistribution,
+    Integer buyIn,
+    Integer entryFee,
+    Integer rebuyAmount,
+    Integer rebuyFee,
+    Integer addonAmount,
+    Integer addonFee,
+    Integer maxRebuys,
+    Boolean addonAllowed,
+    Long startingChips,
+    Long rebuyChips,
+    Long addonChips,
+    JsonObject blindStructure,
+    Integer currentBlindLevel,
+    OffsetDateTime nextBlindIncrease,
+    Integer maxPlayers,
+    Integer minPlayers,
+    Integer tablesCount,
+    Integer seatsPerTable,
+    Boolean lateRegistrationAllowed,
+    Integer lateRegistrationEndLevel,
+    Integer createdBy,
+    OffsetDateTime createdAt,
+    OffsetDateTime updatedAt,
+    String cancelledReason,
+    OffsetDateTime completedAt,
+    List<BlindLevelDTO> blindLevels,
+    List<PrizeDTO> prizes,
+    Integer currentEntries,
+    Integer tablesActive
+) {}

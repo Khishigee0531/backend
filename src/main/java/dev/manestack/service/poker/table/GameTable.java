@@ -53,7 +53,8 @@ public class GameTable {
     private String secureId;
     private double rakePercent = 0.01;
     private String cardBgColor;
-    private int totalRakeCollected = 0; 
+    private int totalRakeCollected = 0;
+    private Long tournamentId; 
     private static final Integer TIMEOUT_SECONDS = 20;
     private static final int BOTS_ALONE_KICK_SECONDS = 180; // 3 minutes
     private LocalDateTime botsAloneStartTime = null;
@@ -120,6 +121,84 @@ public class GameTable {
     public void connectToServer(GameService gameService, UserService userService) {
         if (this.gameService == null) this.gameService = gameService;
         if (this.userService == null) this.userService = userService;
+    }
+
+    public Long getTournamentId() {
+        return tournamentId;
+    }
+
+    public void setTournamentId(Long tournamentId) {
+        this.tournamentId = tournamentId;
+    }
+
+    public boolean isTournamentTable() {
+        return tournamentId != null;
+    }
+
+    public boolean isHandActive() {
+        return currentGameSession != null
+                && currentGameSession.getState() != GameSession.State.FINISHED
+                && currentGameSession.getState() != GameSession.State.WAITING_FOR_PLAYERS;
+    }
+
+    public GamePlayer findPlayer(int userId) {
+        return seats.values().stream()
+                .filter(p -> p != null && p.getUser() != null && p.getUser().getUserId() == userId)
+                .findFirst()
+                .orElse(null);
+    }
+
+    public java.util.Set<Integer> occupiedSeats() {
+        java.util.Set<Integer> used = new java.util.HashSet<>();
+        for (GamePlayer p : seats.values()) {
+            if (p != null && p.getSeatId() != null) used.add(p.getSeatId());
+        }
+        return used;
+    }
+
+    public java.util.List<WebsocketSession> sessionsFor(int userId) {
+        return involvedSessions.values().stream()
+                .filter(s -> s.getUser() != null && s.getUser().getUserId() == userId)
+                .toList();
+    }
+
+    /** Remove a tournament player from the live seat without touching cash balance. */
+    public Uni<Void> removeTournamentPlayer(int userId) {
+        GamePlayer player = findPlayer(userId);
+        if (player == null) return Uni.createFrom().voidItem();
+
+        if (isHandActive() && currentGameSession.getOriginalPlayerList().contains(player)) {
+            try {
+                currentGameSession.receivePlayerAction(userId, ActionType.FOLD, 0, true);
+            } catch (Exception e) {
+                LOG.warnv("Fold before tournament remove failed at {0}: {1}", tableName, e.getMessage());
+            }
+        }
+
+        seats.remove(player.getSeatId());
+        involvedSessions.values().removeIf(s -> s.getUser() != null && s.getUser().getUserId() == userId);
+
+        sendTableUpdateToParticipants(
+                "LEAVE_SEAT",
+                currentGameSession != null ? currentGameSession.getCommunityCards() : List.of()
+        );
+        LOG.infov("Removed tournament player {0} from table {1}", userId, tableName);
+        return Uni.createFrom().voidItem();
+    }
+
+    /** Remove every seated player from a tournament virtual table (no cash balance ops). */
+    public Uni<Void> removeAllTournamentPlayers() {
+        List<GamePlayer> toRemove = seats.values().stream().filter(Objects::nonNull).toList();
+        for (GamePlayer p : toRemove) {
+            try {
+                removeTournamentPlayer(p.getUser().getUserId()).await().indefinitely();
+            } catch (Exception e) {
+                LOG.warnv("Failed removing {0} from {1}: {2}", p.getUser().getUsername(), tableName, e.getMessage());
+                seats.remove(p.getSeatId());
+            }
+        }
+        involvedSessions.clear();
+        return Uni.createFrom().voidItem();
     }
 
     public Uni<Void> takeSeat(int seatNumber, GamePlayer gamePlayer, WebsocketSession session, boolean isBot) {
@@ -203,7 +282,7 @@ public class GameTable {
                         .put("action", "SUBSCRIBE")
                         .put("tableId", tableId)
                         .put("table", this)
-                        .put("session", createSessionData(thisPlayer, currentGameSession != null ? currentGameSession.getCommunityCards() : List.of()))
+                        .put("session", createSessionData(thisPlayer, currentGameSession != null ? currentGameSession.getCommunityCards() : List.of(), session))
         ));
 
         if (thisPlayer != null) {
@@ -213,9 +292,15 @@ public class GameTable {
     }
 
     public JsonObject createSessionData(GamePlayer thisPlayer, List<GameCard> communityCards) {
+        return createSessionData(thisPlayer, communityCards, null);
+    }
+
+    public JsonObject createSessionData(GamePlayer thisPlayer, List<GameCard> communityCards, WebsocketSession session) {
         JsonObject sessionData = new JsonObject();
 
-        boolean isAdmin = thisPlayer != null && User.Role.ADMIN.equals(thisPlayer.getUser().getRole());
+        boolean isAdmin = (thisPlayer != null && User.Role.ADMIN.equals(thisPlayer.getUser().getRole()))
+                || (session != null && session.getUser() != null
+                    && User.Role.ADMIN.equals(session.getUser().getRole()));
 
         if (currentGameSession != null) {
             GamePlayer current = currentGameSession.getCurrentPlayer();
@@ -230,7 +315,7 @@ public class GameTable {
             sessionData.put("smallBlindSeatIndex", currentGameSession.getSmallBlindSeatIndex());
             sessionData.put("dealerSeatIndex", currentGameSession.getDealerSeatIndex());
             sessionData.put("gameVariant", this.variant);
-            sessionData.put("turnStartTime", current != null && current.getTurnStartDate() != null 
+            sessionData.put("turnStartTime", current != null && current.getTurnStartDate() != null
                 ? current.getTurnStartDate().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
                 : null
             );
@@ -239,7 +324,7 @@ public class GameTable {
         Map<Integer, JsonObject> serializedPlayersMap = new HashMap<>();
         if (currentGameSession != null) {
             for (GamePlayer player : currentGameSession.getOriginalPlayerList()) {
-                serializedPlayersMap.put(player.getSeatId(), serializePlayer(player, thisPlayer));
+                serializedPlayersMap.put(player.getSeatId(), serializePlayer(player, thisPlayer, isAdmin));
             }
         }
 
@@ -247,7 +332,7 @@ public class GameTable {
         Map<Integer, List<GameCard>> hiddenHoleCards = new HashMap<>();
         int numHoleCards = "OMAHA".equals(this.variant) ? 4 : 2;
 
-      
+
         for (Map.Entry<Integer, GamePlayer> entry : seats.entrySet()) {
             GamePlayer gamePlayer = entry.getValue();
             if (gamePlayer != null) {
@@ -484,6 +569,18 @@ public class GameTable {
         int stackAmount = gamePlayer.getStack();
         seats.remove(gamePlayer.getSeatId());
 
+        if (isTournamentTable()) {
+            if (currentGameSession != null) {
+                currentGameSession.handleLeave(userId);
+            }
+            involvedSessions.values().removeIf(s -> s.getUser() != null && s.getUser().getUserId() == userId);
+            sendTableUpdateToParticipants("LEAVE_SEAT",
+                    currentGameSession != null ? currentGameSession.getCommunityCards() : List.of());
+            LOG.infov("Tournament player {0} left seat {1} at table {2} (no cash unlock)",
+                    userId, gamePlayer.getSeatId(), tableName);
+            return Uni.createFrom().voidItem();
+        }
+
         return userService.unlockBalance(userId, stackAmount)
                 .flatMap(unused -> {
                     if (currentGameSession != null) {
@@ -582,6 +679,24 @@ public class GameTable {
                 if (player == null) continue;
 
                 if (player.getStack() <= 0) {
+                    if (isTournamentTable()) {
+                        // Tournament: bust immediately — human entries go through eliminate/rebalance;
+                        // bots leave the seat without DB entry or cash recharge.
+                        final int bustedUserId = player.getUser().getUserId();
+                        final boolean bustedBot = player.isBot();
+                        final Long bustTournamentId = this.tournamentId;
+                        LOG.infov("Tournament bust: {0} {1} at table {2} — eliminating",
+                                bustedBot ? "bot" : "user", bustedUserId, tableName);
+                        seats.remove(player.getSeatId());
+                        involvedSessions.values().removeIf(s ->
+                                s.getUser() != null && s.getUser().getUserId() == bustedUserId);
+                        sendTableUpdateToParticipants("LEAVE_SEAT",
+                                currentGameSession != null ? currentGameSession.getCommunityCards() : List.of());
+                        if (!bustedBot && gameService != null && bustTournamentId != null) {
+                            gameService.notifyTournamentBust(bustTournamentId, bustedUserId, tableId);
+                        }
+                        continue;
+                    }
                     if (player.isBot() && player.getBotRecharges() < 3) {
                         final GamePlayer botToRecharge = player;
                         final int rechargeAmount = this.minBuyIn;
@@ -660,8 +775,12 @@ public class GameTable {
 
         // 4. Unlock balance and update UI (async, fire-and-forget)
         //    Bots are in-memory only — skip DB balance operations for them.
+        //    Tournament chips are not cash — never unlock balance on tournament tables.
         if (gamePlayer.isBot()) {
             LOG.infov("Player {0} is a bot, skipping DB balance unlock", gamePlayer.getUser().getUsername());
+        } else if (isTournamentTable()) {
+            LOG.infov("Tournament kick for {0} — skipping cash balance unlock",
+                    gamePlayer.getUser().getUsername());
         } else {
             userService.unlockBalance(userId, stackAmount)
                 .flatMap(unused -> balanceService.fetchUserBalance(userId)
@@ -798,6 +917,9 @@ public class GameTable {
             // Zero-stack check (real players and bots that have exhausted recharges).
             if (player.getStack() > 0) {
                 player.setZeroStackStartDate(null); // recharged — cancel timer
+            } else if (isTournamentTable()) {
+                // Tournament bust is handled at hand end — no 5-minute cash kick timer.
+                player.setZeroStackStartDate(null);
             } else if (!(player.isBot() && player.getBotRecharges() < 3)) {
                 if (player.getZeroStackStartDate() == null) {
                     player.setZeroStackStartDate(now);
@@ -835,6 +957,8 @@ public class GameTable {
     }
 
     private void checkAloneAtTable(LocalDateTime now) {
+        if (isTournamentTable()) return; // tournament tables never lone-kick
+
         long seatedCount = seats.values().stream().filter(Objects::nonNull).count();
 
         if (seatedCount != 1) {
@@ -900,13 +1024,16 @@ public void sendGameStateUpdateToParticipants(GameSession.State state, List<Game
                     .filter(seat -> seat.getUser().getUserId() == playerSession.getUser().getUserId())
                     .findFirst().orElse(null);
 
+            boolean viewerIsAdmin = playerSession.getUser() != null
+                && User.Role.ADMIN.equals(playerSession.getUser().getRole());
+
             JsonObject playersJson = new JsonObject();
 
             for (GamePlayer player : seats.values()) {
                 if (player != null) {
                     playersJson.put(
                         String.valueOf(player.getSeatId()),
-                        serializePlayer(player, viewerPlayer)
+                        serializePlayer(player, viewerPlayer, viewerIsAdmin)
                     );
                 }
             }
@@ -927,6 +1054,10 @@ public void sendGameStateUpdateToParticipants(GameSession.State state, List<Game
     }
 
     private JsonObject serializePlayer(GamePlayer player, GamePlayer viewer) {
+        return serializePlayer(player, viewer, false);
+    }
+
+    private JsonObject serializePlayer(GamePlayer player, GamePlayer viewer, boolean viewerIsAdmin) {
         JsonObject json = new JsonObject();
 
         json.put("seatId", player.getSeatId());
@@ -955,8 +1086,9 @@ public void sendGameStateUpdateToParticipants(GameSession.State state, List<Game
             json.put("user", null);
         }
 
-        boolean isAdmin = viewer != null && viewer.getUser() != null
-            && User.Role.ADMIN.equals(viewer.getUser().getRole());
+        boolean isAdmin = viewerIsAdmin
+            || (viewer != null && viewer.getUser() != null
+            && User.Role.ADMIN.equals(viewer.getUser().getRole()));
         boolean isSelf = viewer != null && viewer.getSeatId() != null
             && viewer.getSeatId().equals(player.getSeatId());
         boolean canSeeRealCards = isAdmin || isSelf || player.isRevealApproved();
@@ -1211,7 +1343,7 @@ public void sendGameStateUpdateToParticipants(GameSession.State state, List<Game
                     .put("action", action)
                     .put("tableId", tableId)
                     .put("table", this)
-                    .put("session", createSessionData(thisPlayer, communityCards))
+                    .put("session", createSessionData(thisPlayer, communityCards, involvedSession))
                     .put("lockedAmount", lockedAmount)
                     .put("playersInTable", getPlayersInTable())
                     .put("activePlayers", getActivePlayers())
@@ -1287,14 +1419,16 @@ public void sendGameStateUpdateToParticipants(GameSession.State state, List<Game
                     // Player has a seat - use personalized session data
                     sessionData = cachedSessionData.computeIfAbsent(
                         thisPlayer.getSeatId(),
-                        seatId -> createSessionData(thisPlayer, communityCards)
+                        seatId -> createSessionData(thisPlayer, communityCards, playerSession)
                     );
                     lockedAmount = getLockedAmountForPlayer(thisPlayer);
                 } else {
-                    // Spectator - use generic session data (no hole cards)
+                    // Spectator - use generic session data; admin spectators still get hole cards
+                    boolean spectatorIsAdmin = playerSession.getUser() != null
+                        && User.Role.ADMIN.equals(playerSession.getUser().getRole());
                     sessionData = cachedSessionData.computeIfAbsent(
-                        -1,  // Use -1 as key for spectator data
-                        seatId -> createSessionData(null, communityCards)
+                        spectatorIsAdmin ? -2 : -1,
+                        seatId -> createSessionData(null, communityCards, playerSession)
                     );
                 }
 
@@ -1526,7 +1660,7 @@ public void sendGameStateUpdateToParticipants(GameSession.State state, List<Game
         this.smallBlind = r.getSmallBlind();
         this.minBuyIn = r.getMinBuyIn();
         this.maxBuyIn = r.getMaxBuyIn();
-        this.rakePercent = r.getRakePercent().doubleValue(); 
+        this.rakePercent = r.getRakePercent().doubleValue();
         this.createdAt = r.getCreatedAt();
         this.createdBy = r.getCreatedBy();
         this.secureId = r.getSecureId();

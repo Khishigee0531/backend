@@ -97,6 +97,8 @@ public class GameService {
     Instance<GameTable> tableFactory;
     @Inject
     MetricsService metricsService;
+    @Inject
+    jakarta.enterprise.inject.Instance<dev.manestack.service.tournament.TournamentService> tournamentServiceInstance;
 
   
 
@@ -104,6 +106,7 @@ public class GameService {
         fetchTablesFromDB().invoke(tables -> {
                     for (GameTable table : tables) {
                         table.connectToServer(this, userService);
+                        markTournamentTables(table);
                         TABLES.put(table.getTableId(), table);
                     }
                 })
@@ -247,6 +250,68 @@ public class GameService {
             Integer amount = event.getData().getInteger("amount", 0);
             Boolean isBot = event.getData().getBoolean("isBot", false);
             String botName = event.getData().getString("botName");
+            Long tournamentId = event.getData().getLong("tournamentId");
+
+            if (Boolean.TRUE.equals(isBot)) {
+                Boolean isGoodBot = event.getData().getBoolean("isGoodBot", false);
+                String botAvatar = event.getData().getString("botAvatar");
+                int seatAmount = amount;
+
+                if (table.isTournamentTable() || tournamentId != null) {
+                    // Tournament bots always start with the tournament stack — never cash buy-in limits.
+                    seatAmount = resolveTournamentBotChips(tournamentId != null ? tournamentId : table.getTournamentId());
+                } else if (amount < table.getMinBuyIn() || amount > table.getMaxBuyIn()) {
+                    LOG.warnv("Invalid buy-in amount {0} for table {1}", amount, tableId);
+                    EVENT_NOTIFIER_EMITTER.emit(new WebsocketEvent(
+                            event.getId(),
+                            "ERROR",
+                            new JsonObject().put("error", "Invalid buy-in amount")
+                    ));
+                    return Uni.createFrom().voidItem();
+                }
+
+                User botUser = new User();
+                botUser.setUserId((int) BOT_ID_GEN.getAndIncrement());
+                botUser.setUsername(botName != null ? botName : (Boolean.TRUE.equals(isGoodBot) ? "GoodBot" : "Bot"));
+                botUser.setRole(User.Role.BOT);
+                if (botAvatar != null && !botAvatar.isEmpty()) {
+                    botUser.setAvatar(botAvatar);
+                }
+
+                GamePlayer botPlayer = new GamePlayer(botUser, seatAmount);
+                botPlayer.setGoodBot(Boolean.TRUE.equals(isGoodBot));
+
+                return table.takeSeat(seatNumber, botPlayer, null, true)
+                        .replaceWithVoid();
+            }
+
+            if (tournamentId != null || table.isTournamentTable()) {
+                final Long effectiveTournamentId =
+                        tournamentId != null ? tournamentId : table.getTournamentId();
+                return Uni.createFrom().voidItem()
+                        .emitOn(QUERY_THREADS)
+                        .chain(unused -> {
+                            int chips = tournamentServiceInstance.get()
+                                    .validateTournamentTakeSeat(
+                                            session.getUser().getUserId(),
+                                            effectiveTournamentId,
+                                            tableId,
+                                            seatNumber);
+                            GamePlayer gamePlayer = new GamePlayer(session.getUser(), chips);
+                            session.setTable(table);
+                            return table.takeSeat(seatNumber, gamePlayer, session, false);
+                        })
+                        .replaceWithVoid()
+                        .onFailure().invoke(err -> {
+                            LOG.warnv("Tournament take-seat failed for user {0}: {1}",
+                                    session.getUser().getUserId(), err.getMessage());
+                            EVENT_NOTIFIER_EMITTER.emit(new WebsocketEvent(
+                                    event.getId(),
+                                    "ERROR",
+                                    new JsonObject().put("error", err.getMessage() != null ? err.getMessage() : "Cannot join tournament table")
+                            ));
+                        });
+            }
 
             if (amount < table.getMinBuyIn() || amount > table.getMaxBuyIn()) {
                 LOG.warnv("Invalid buy-in amount {0} for table {1}", amount, tableId);
@@ -258,48 +323,26 @@ public class GameService {
                 return Uni.createFrom().voidItem();
             }
 
-            if (isBot) {
-                Boolean isGoodBot = event.getData().getBoolean("isGoodBot", false);
-                String botAvatar = event.getData().getString("botAvatar");
-
-                User botUser = new User();
-                botUser.setUserId((int) BOT_ID_GEN.getAndIncrement());
-                botUser.setUsername(botName != null ? botName : (Boolean.TRUE.equals(isGoodBot) ? "GoodBot" : "Bot"));
-                botUser.setRole(User.Role.BOT);
-                if (botAvatar != null && !botAvatar.isEmpty()) {
-                    botUser.setAvatar(botAvatar);
-                }
-
-                GamePlayer botPlayer = new GamePlayer(botUser, amount);
-                botPlayer.setGoodBot(Boolean.TRUE.equals(isGoodBot));
-
-                return table.takeSeat(seatNumber, botPlayer, null, true)
-                        .replaceWithVoid();
-
-
-
-            } else {
-                return balanceService.fetchUserBalance(session.getUser().getUserId())
-                        .call(userBalance -> {
-                            if (userBalance.getBalance() < amount) {
-                                LOG.errorv("Insufficient balance for user {0} at table {1}", session.getUser().getUserId(), tableId);
-                                EVENT_NOTIFIER_EMITTER.emit(new WebsocketEvent(
-                                        event.getId(),
-                                        "ERROR",
-                                        new JsonObject().put("error", "Insufficient balance")
-                                ));
-                                return Uni.createFrom().voidItem();
-                            }
-                            return depositService.createOutcomeRecord(session.getUser().getUserId(), -amount, "BUY_IN")
-                                    .call(() -> depositService.approveOutcomeRecords(session.getUser().getUserId()))
-                                    .call(() -> {
-                                        GamePlayer gamePlayer = new GamePlayer(session.getUser(), amount);
-                                        session.setTable(table);
-                                        return table.takeSeat(seatNumber, gamePlayer, session, false);
-                                    });
-                        })
-                        .replaceWithVoid();
-            }
+            return balanceService.fetchUserBalance(session.getUser().getUserId())
+                    .call(userBalance -> {
+                        if (userBalance.getBalance() < amount) {
+                            LOG.errorv("Insufficient balance for user {0} at table {1}", session.getUser().getUserId(), tableId);
+                            EVENT_NOTIFIER_EMITTER.emit(new WebsocketEvent(
+                                    event.getId(),
+                                    "ERROR",
+                                    new JsonObject().put("error", "Insufficient balance")
+                            ));
+                            return Uni.createFrom().voidItem();
+                        }
+                        return depositService.createOutcomeRecord(session.getUser().getUserId(), -amount, "BUY_IN")
+                                .call(() -> depositService.approveOutcomeRecords(session.getUser().getUserId()))
+                                .call(() -> {
+                                    GamePlayer gamePlayer = new GamePlayer(session.getUser(), amount);
+                                    session.setTable(table);
+                                    return table.takeSeat(seatNumber, gamePlayer, session, false);
+                                });
+                    })
+                    .replaceWithVoid();
         }
 
             case LEAVE_SEAT -> {
@@ -337,6 +380,16 @@ public class GameService {
                 table.subscribe(session, false);
             }
             case RECHARGE -> {
+                if (tournamentServiceInstance.get().isTournamentTable(tableId)) {
+                    LOG.warnv("Cash recharge blocked on tournament table {0} for user {1}",
+                            tableId, session.getUser().getUserId());
+                    EVENT_NOTIFIER_EMITTER.emit(new WebsocketEvent(
+                            event.getId(),
+                            "ERROR",
+                            new JsonObject().put("error", "Recharge is not allowed in tournaments")
+                    ));
+                    return Uni.createFrom().voidItem();
+                }
                 GamePlayer gamePlayer = table.getSeats().values().stream().filter(Objects::nonNull)
                         .filter(player -> player.getUser().getUserId() == session.getUser().getUserId())
                         .findFirst()
@@ -562,7 +615,9 @@ public class GameService {
 
         if (!memoryTables.isEmpty()) {
             LOG.infov("Fetching tables from memory, count={0}", memoryTables.size());
-            return Uni.createFrom().item(memoryTables);
+            return Uni.createFrom().item(memoryTables.stream()
+                    .filter(t -> !t.isTournamentTable())
+                    .toList());
         }
 
         LOG.info("Memory empty, fetching tables from DB");
@@ -570,8 +625,162 @@ public class GameService {
                 .onItem().invoke(dbTables -> {
                     if (shuttingDown) return;
                     LOG.infov("Fetched {0} tables from DB, populating memory", dbTables.size());
-                    dbTables.forEach(table -> TABLES.put(table.getTableId(), table));
+                    dbTables.forEach(table -> {
+                        markTournamentTables(table);
+                        TABLES.put(table.getTableId(), table);
+                    });
+                })
+                .map(dbTables -> dbTables.stream()
+                        .filter(t -> !t.isTournamentTable())
+                        .toList());
+    }
+
+    private void markTournamentTables(GameTable table) {
+        try {
+            var row = context.select(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_TABLE.TOURNAMENT_ID)
+                    .from(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_TABLE)
+                    .where(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_TABLE.TABLE_ID.eq(table.getTableId()))
+                    .fetchOne();
+            if (row != null) {
+                table.setTournamentId(row.value1());
+            }
+        } catch (Exception e) {
+            LOG.debugv("No tournament mapping for table {0}: {1}", table.getTableId(), e.getMessage());
+        }
+    }
+
+    /** Remove a tournament player from a virtual table live seat (no cash unlock). */
+    public Uni<Void> removeTournamentPlayer(Long tableId, Integer userId) {
+        return Uni.createFrom().voidItem()
+                .emitOn(GAMEPLAY_THREAD)
+                .chain(unused -> {
+                    GameTable table = TABLES.get(tableId);
+                    if (table == null) return Uni.createFrom().voidItem();
+                    return table.removeTournamentPlayer(userId);
                 });
+    }
+
+    /** Starting chips for a tournament bot seat; falls back to table max buy-in. */
+    private int resolveTournamentBotChips(Long tournamentId) {
+        try {
+            if (tournamentId != null) {
+                var t = context.select(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT.STARTING_CHIPS)
+                        .from(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT)
+                        .where(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT.TOURNAMENT_ID.eq(tournamentId))
+                        .fetchOne(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT.STARTING_CHIPS);
+                if (t != null && t > 0) return t.intValue();
+            }
+        } catch (Exception e) {
+            LOG.debugv("Could not load tournament starting chips for {0}: {1}", tournamentId, e.getMessage());
+        }
+        return 10_000;
+    }
+
+    /** Called when a tournament player's stack hits 0 after a hand. */
+    public void notifyTournamentBust(Long tournamentId, Integer userId, Long tableId) {
+        try {
+            var ts = tournamentServiceInstance.get();
+            long remaining = context.fetchCount(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_ENTRY,
+                    dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_ENTRY.TOURNAMENT_ID.eq(tournamentId)
+                            .and(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_ENTRY.STATUS
+                                    .ne("ELIMINATED"))
+                            .and(dev.manestack.jooq.generated.Tables.POKER_TOURNAMENT_ENTRY.STATUS.ne("CANCELLED")));
+            Integer finalPosition = remaining > 0 ? (int) remaining : null;
+            ts.eliminate(tournamentId, userId, finalPosition)
+                    .chain(() -> ts.rebalanceTables(tournamentId))
+                    .subscribe().with(
+                            entry -> LOG.infov("Tournament bust eliminated user {0} in T{1}", userId, tournamentId),
+                            err -> LOG.errorv("Tournament bust failed for user {0}: {1}", userId, err.getMessage()));
+        } catch (Exception e) {
+            LOG.errorv(e, "notifyTournamentBust failed for user {0}", userId);
+        }
+    }
+
+    /** Remove a tournament virtual table from memory (and optionally delete the cash-table row). */
+    public Uni<Void> destroyTournamentTable(Long tableId, boolean deleteRow) {
+        return Uni.createFrom().voidItem()
+                .emitOn(QUERY_THREADS)
+                .invoke(unused -> {
+                    GameTable table = TABLES.get(tableId);
+                    if (table != null && table.isTournamentTable()) {
+                        try {
+                            table.removeAllTournamentPlayers().await().indefinitely();
+                        } catch (Exception e) {
+                            LOG.warnv("Failed clearing players on tournament table {0}: {1}", tableId, e.getMessage());
+                        }
+                    }
+                    TABLES.remove(tableId);
+                    if (deleteRow) {
+                        try {
+                            context.deleteFrom(Tables.POKER_HAND_HISTORY)
+                                    .where(Tables.POKER_HAND_HISTORY.TABLE_ID.eq(tableId.intValue()))
+                                    .execute();
+                        } catch (Exception ignored) {
+                        }
+                        context.deleteFrom(POKER_TABLE)
+                                .where(POKER_TABLE.TABLE_ID.eq(tableId))
+                                .execute();
+                    }
+                    LOG.infov("Destroyed tournament table {0} (deleteRow={1})", tableId, deleteRow);
+                });
+    }
+
+    /** Move a tournament player from one virtual table to another (physical seat move). */
+    public Uni<Void> moveTournamentPlayer(Long fromTableId, Long toTableId, Integer userId, Integer seatNumber, Integer chips) {
+        return Uni.createFrom().voidItem()
+                .emitOn(GAMEPLAY_THREAD)
+                .chain(unused -> {
+                    GameTable from = TABLES.get(fromTableId);
+                    GameTable to = TABLES.get(toTableId);
+                    if (to == null) {
+                        return Uni.createFrom().failure(new IllegalStateException("Destination table not found: " + toTableId));
+                    }
+                    WebsocketSession found = null;
+                    if (from != null) {
+                        found = from.sessionsFor(userId).stream().findFirst().orElse(null);
+                        from.removeTournamentPlayer(userId).await().indefinitely();
+                    }
+                    final WebsocketSession session = found;
+                    GamePlayer player = session != null && session.getUser() != null
+                            ? new GamePlayer(session.getUser(), chips)
+                            : null;
+                    if (player == null) {
+                        LOG.warnv("Cannot physically move user {0} — no session; DB assignment only", userId);
+                        return Uni.createFrom().voidItem();
+                    }
+                    final GameTable dest = to;
+                    final int seat = seatNumber != null ? seatNumber : findFreeSeat(to);
+                    return dest.takeSeat(seat, player, session, false)
+                            .invoke(() -> {
+                                if (session != null) session.setTable(dest);
+                                dest.subscribe(session, false);
+                                gameServiceNotifyTableMoved(session, dest, seat, chips);
+                            });
+                });
+    }
+
+    private int findFreeSeat(GameTable table) {
+        java.util.Set<Integer> used = table.occupiedSeats();
+        int max = table.getMaxPlayers() != null ? table.getMaxPlayers() : 9;
+        for (int i = 0; i < max; i++) {
+            if (!used.contains(i)) return i;
+        }
+        return 0;
+    }
+
+    private void gameServiceNotifyTableMoved(WebsocketSession session, GameTable to, int seat, Integer chips) {
+        if (session == null) return;
+        sendWebsocketEvent(new WebsocketEvent(
+                session.getId(),
+                "TOURNAMENT_TABLE_MOVED",
+                new JsonObject()
+                        .put("tableId", to.getTableId())
+                        .put("secureId", to.getSecureId())
+                        .put("tableName", to.getTableName())
+                        .put("seatNumber", seat)
+                        .put("chips", chips)
+                        .put("tournamentId", to.getTournamentId())
+        ));
     }
    
     public Uni<GameTable> fetchTableBySecureId(String secureId) {

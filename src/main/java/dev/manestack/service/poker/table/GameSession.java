@@ -1140,6 +1140,10 @@ public class GameSession {
         return lastRaiseSeat;
     }
 
+    public int getLastRaiseSize() {
+        return lastRaiseSize;
+    }
+
     public double getTotalRake() {
         return totalRake;
     }

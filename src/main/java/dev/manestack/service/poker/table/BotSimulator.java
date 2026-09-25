@@ -87,25 +87,33 @@ public class BotSimulator {
             botCards.addAll(fullBoard);
             GameHand botBest = GameHandEvaluator.evaluate(botCards);
 
-            boolean botIsGuaranteedWinner = true;
+            GameHand bestOppHand = null;
+            boolean allOpponentsKnown = true;
             for (GamePlayer opponent : session.getOriginalPlayerList()) {
                 if (opponent == botPlayer) continue;
                 if (!opponent.isInHand() || opponent.isFolded()) continue;
 
                 List<GameCard> oppHole = opponent.getHoleCards();
                 if (oppHole == null || oppHole.isEmpty()) {
-                    botIsGuaranteedWinner = false;
+                    allOpponentsKnown = false;
                     break;
                 }
 
                 List<GameCard> oppCards = new ArrayList<>(oppHole);
                 oppCards.addAll(fullBoard);
                 GameHand oppBest = GameHandEvaluator.evaluate(oppCards);
-
-                if (botBest.compareTo(oppBest) <= 0) {
-                    botIsGuaranteedWinner = false;
-                    break;
+                if (bestOppHand == null || oppBest.compareTo(bestOppHand) > 0) {
+                    bestOppHand = oppBest;
                 }
+            }
+
+            int comparison;
+            if (!allOpponentsKnown) {
+                comparison = 0;
+            } else if (bestOppHand == null) {
+                comparison = 1;
+            } else {
+                comparison = botBest.compareTo(bestOppHand);
             }
 
             int bb          = session.getTable().getBigBlind();
@@ -114,19 +122,43 @@ public class BotSimulator {
             int highestBet  = session.getPlayerBets().values().stream().max(Integer::compareTo).orElse(0);
             int callAmount  = Math.max(0, highestBet - botBet);
             int pot         = session.getPotSize();
-            int minAllowed  = highestBet + Math.min(2 * bb, botStack);
-            int raisePot    = Math.min(botStack, Math.max(minAllowed, callAmount + pot));
+            int lastRaise   = session.getLastRaiseSize();
+            int prevRaise   = lastRaise > 0 ? lastRaise : bb;
+            int minRaiseTotal = highestBet + prevRaise;
+            int raiseTarget = Math.max(minRaiseTotal, Math.max(highestBet + 2 * bb, callAmount + pot));
+            int maxTotal    = botStack + botBet;
+            int raiseAmount = Math.min(raiseTarget, maxTotal);
+            if (raiseAmount < minRaiseTotal && raiseAmount < botStack) {
+                raiseAmount = botStack;
+            }
 
             GameSession.ActionType action;
             int amount;
 
-            if (botIsGuaranteedWinner) {
-                action = GameSession.ActionType.RAISE;
-                amount = raisePot;
-            } else {
-                if (callAmount == 0) {
+            if (callAmount == 0) {
+                if (comparison > 0) {
+                    action = GameSession.ActionType.RAISE;
+                    amount = raiseAmount;
+                } else {
                     action = GameSession.ActionType.CHECK;
                     amount = 0;
+                }
+            } else {
+                if (comparison > 0) {
+                    action = GameSession.ActionType.RAISE;
+                    amount = raiseAmount;
+                } else if (comparison == 0) {
+                    action = GameSession.ActionType.CALL;
+                    amount = Math.min(callAmount, botStack);
+                } else if (!allOpponentsKnown) {
+                    int potOddsCall = callAmount;
+                    if (potOddsCall <= pot / 3 + bb) {
+                        action = GameSession.ActionType.CALL;
+                        amount = Math.min(potOddsCall, botStack);
+                    } else {
+                        action = GameSession.ActionType.FOLD;
+                        amount = 0;
+                    }
                 } else {
                     action = GameSession.ActionType.FOLD;
                     amount = 0;

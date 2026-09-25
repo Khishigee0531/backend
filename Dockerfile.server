@@ -1,0 +1,15 @@
+FROM eclipse-temurin:21-jre
+
+WORKDIR /app
+
+COPY quarkus-app/lib/ ./lib/
+COPY quarkus-app/*.jar ./
+COPY quarkus-app/app/ ./app/
+COPY quarkus-app/quarkus/ ./quarkus/
+COPY application.properties ./config/application.properties
+
+EXPOSE 8080
+
+ENV JAVA_OPTS="-Dquarkus.http.host=0.0.0.0 -Dquarkus.config.locations=/app/config/application.properties"
+
+ENTRYPOINT ["java", "-jar", "quarkus-run.jar"]
